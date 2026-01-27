@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="AIBlocker.vcxproj" />
+  <Project Path="AIBlocker.vcxproj" Id="968a1f9e-e427-4ccf-8609-507c815344f0" />
 </Solution>
