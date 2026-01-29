@@ -1,7 +1,9 @@
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 
 namespace UIT;
 
@@ -11,6 +13,8 @@ public partial class Form1 : Form
 
     private const string UpstreamDns = "8.8.8.8";
     private const int UpstreamPort = 53;
+
+    private const int StudentsPort = 5000;
 
     private static readonly TimeSpan MappingTtl = TimeSpan.FromHours(24);
 
@@ -260,11 +264,32 @@ public partial class Form1 : Form
 
         _ = CleanupExpiredMappingsLoopAsync(_cts.Token);
         _ = RunDnsServerAsync(ip, _cts.Token);
-    }
+        TcpListener listener = new TcpListener(IPAddress.Parse(ip), StudentsPort);
+        listener.Start();
+        ArrayList students = new ArrayList();
+        while (true)
+        {
+            Socket socket = listener.AcceptSocket();
+            byte[] msg = new byte[1024];
+            socket.Close();
+            int len = socket.Receive(msg);
+            string jsonData = Encoding.UTF8.GetString(msg, 0, len);
+            var data = JsonSerializer.Deserialize<Dictionary<string, string>>(jsonData);
+            students.Add(data?["Username"]);
+            listBox1.Items.Clear();
+            foreach (string student in students)
+                listBox1.Items.Add(student);
+        }
+    }                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         _cts?.Cancel();
         base.OnFormClosing(e);
+    }
+
+    private void listBox1_SelectedIndexChanged(object sender, EventArgs e)
+    {
+
     }
 }
