@@ -31,16 +31,17 @@ SOCKET createSocket(const int port = LISTENING_PORT) {
 #else
 	addr.sin_port = port;
 #endif
-	while (bind(sockfd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR) {
+	if (bind(sockfd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR) {
 		const int err = WSAGetLastError();
 		closesocket(sockfd);
 		//std::cout << "failed";
 #ifdef WIN32
-		system("")
+		system("");
 #else
 
 #endif
 		//throw std::runtime_error("bind failed: " + std::to_string(err));
+	
 	}
 	//std::cout << "success";
 	return sockfd;
