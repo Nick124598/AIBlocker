@@ -4,7 +4,7 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="../UIStudent/UIStudent.csproj" Id="e6c79f66-dd57-4925-b387-1e66bf9274b3" />
   <Project Path="AIBlocker.vcxproj" Id="968a1f9e-e427-4ccf-8609-507c815344f0" />
+  <Project Path="UIStudent/UIStudent.csproj" />
   <Project Path="UIT/UIT.csproj" Id="0f8fcf92-ef62-416a-96de-54aac7dfcc68" />
 </Solution>

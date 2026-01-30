@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
@@ -51,13 +52,39 @@ public partial class Form1 : Form
 
     private static string GetLocalIPv4OrLoopback()
     {
-        var host = Dns.GetHostEntry(Dns.GetHostName());
-        foreach (var ip in host.AddressList)
+        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
         {
-            if (ip.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(ip))
-                return ip.ToString();
+            if (ni.OperationalStatus != OperationalStatus.Up)
+                continue;
+
+            if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback ||
+                ni.NetworkInterfaceType == NetworkInterfaceType.Tunnel)
+                continue;
+
+            var props = ni.GetIPProperties();
+
+            // Must have a default gateway IPv4 => usually your LAN/Wi-Fi
+            bool hasIpv4Gateway = props.GatewayAddresses.Any(g =>
+                g.Address.AddressFamily == AddressFamily.InterNetwork &&
+                !g.Address.Equals(IPAddress.Any) &&
+                !g.Address.Equals(IPAddress.Parse("0.0.0.0")));
+
+            if (!hasIpv4Gateway)
+                continue;
+
+            // Pick the first real IPv4 unicast address
+            var addr = props.UnicastAddresses
+                .Select(u => u.Address)
+                .FirstOrDefault(a =>
+                    a.AddressFamily == AddressFamily.InterNetwork &&
+                    !IPAddress.IsLoopback(a) &&
+                    !a.ToString().StartsWith("169.254.")); // APIPA
+
+            if (addr != null)
+                return addr.ToString();
         }
-        return "127.0.0.1";
+
+        return IPAddress.Loopback.ToString();
     }
 
     private string LookupUsername(string clientIp)
@@ -229,7 +256,8 @@ public partial class Form1 : Form
                 {
                     if (blocked)
                     {
-                        UiLog($"[{NowStr()}] BLOCK: user={username} ip={clientIp}:{clientPort} domain={domain}");
+                        using var writer = new StreamWriter("log.txt", false);
+                        writer.WriteLine("User: " + username + " used: ");
 
                         var resp = BuildNxdomainResponse(received.Buffer);
                         if (resp.Length > 0)
@@ -255,6 +283,68 @@ public partial class Form1 : Form
         }
     }
 
+    private async Task ServerListen(string ip, CancellationToken ct)
+    {
+        var listener = new TcpListener(IPAddress.Parse(ip), StudentsPort);
+        listener.Start();
+
+        var students = new List<string>();
+
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                var client = await listener.AcceptTcpClientAsync(ct);
+
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        using (client)
+                        using (var stream = client.GetStream())
+                        {
+                            var buf = new byte[4096];
+                            int len = await stream.ReadAsync(buf, ct);
+
+                            var jsonData = Encoding.UTF8.GetString(buf, 0, len);
+                            var data = JsonSerializer.Deserialize<Dictionary<string, string>>(jsonData);
+
+                            if (data != null && data.TryGetValue("Username", out var username) && !string.IsNullOrWhiteSpace(username))
+                            {
+                                lock (students)
+                                    students.Add(username);
+                                 client.GetStream().Write(Encoding.UTF8.GetBytes("OK"));
+
+                                BeginInvoke((Action)(() =>
+                                {
+                                    listBox1.Items.Clear();
+                                    lock (students)
+                                    {
+                                        foreach (var s in students)
+                                            listBox1.Items.Add(s);
+                                    }
+                                }));
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        UiLog($"[{NowStr()}] Student registration error: {ex.Message}");
+                    }
+                }, ct);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // normal shutdown
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+
     private void Form1_Load(object sender, EventArgs e)
     {
         var ip = GetLocalIPv4OrLoopback();
@@ -264,22 +354,7 @@ public partial class Form1 : Form
 
         _ = CleanupExpiredMappingsLoopAsync(_cts.Token);
         _ = RunDnsServerAsync(ip, _cts.Token);
-        TcpListener listener = new TcpListener(IPAddress.Parse(ip), StudentsPort);
-        listener.Start();
-        ArrayList students = new ArrayList();
-        while (true)
-        {
-            Socket socket = listener.AcceptSocket();
-            byte[] msg = new byte[1024];
-            socket.Close();
-            int len = socket.Receive(msg);
-            string jsonData = Encoding.UTF8.GetString(msg, 0, len);
-            var data = JsonSerializer.Deserialize<Dictionary<string, string>>(jsonData);
-            students.Add(data?["Username"]);
-            listBox1.Items.Clear();
-            foreach (string student in students)
-                listBox1.Items.Add(student);
-        }
+        _ = ServerListen(ip, _cts.Token);
     }                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
 
     protected override void OnFormClosing(FormClosingEventArgs e)
