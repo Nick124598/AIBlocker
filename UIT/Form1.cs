@@ -338,13 +338,40 @@ public partial class Form1 : Form
                         {
                             var buf = new byte[4096];
                             int len = await stream.ReadAsync(buf, ct);
-
-                            var jsonData = Encoding.UTF8.GetString(buf, 0, len);
-                            var data = JsonSerializer.Deserialize<Dictionary<string, string>>(jsonData);
-
-                            if (data != null && data.TryGetValue("Username", out var username) && !string.IsNullOrWhiteSpace(username))
+                            var remoteIp = ((IPEndPoint)client.Client.RemoteEndPoint!).Address;
+                            var username = LookupUsername(remoteIp);
+                            var bufStr = Encoding.UTF8.GetString(buf, 0, len);
+                            if (bufStr == "EXIT")
                             {
-                                var remoteIp = ((IPEndPoint)client.Client.RemoteEndPoint!).Address;
+                                lock (students)
+                                {
+                                    if (username != null)
+                                    {
+                                        students.Remove(username);
+                                        _logSemaphore.WaitAsync(ct);
+                                        try
+                                        {
+                                            File.AppendAllTextAsync("log.txt",
+                                                $"[{NowStr()}] User: {username} | IP: {remoteIp} | EXIT{Environment.NewLine}", ct);
+                                            _ipToUser[client.Client.RemoteEndPoint is IPEndPoint remoteEndPoint ? remoteEndPoint.Address : IPAddress.None] = string.Empty;
+                                            listBox1.Items.Clear();
+                                            foreach (var s in students)
+                                                listBox1.Items.Add(s);
+                                        }
+                                        finally
+                                        {
+                                            _logSemaphore.Release();
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
+
+                            var data = JsonSerializer.Deserialize<Dictionary<string, string>>(bufStr);
+
+
+                            if (data != null && data.TryGetValue("Username", out username) && !string.IsNullOrWhiteSpace(username))
+                            {
                                 lock (students)
                                     students.Add(username);
                                 _ipToUser[remoteIp] = username;
@@ -352,7 +379,7 @@ public partial class Form1 : Form
                                 try
                                 {
                                     await File.AppendAllTextAsync("log.txt",
-                    $"[{NowStr()}] User: {username} | IP: {remoteIp} | REGISTER",
+                    $"[{NowStr()}] User: {username} | IP: {remoteIp} | REGISTER{Environment.NewLine}",
                     ct);
                                 }
                                 finally
@@ -370,6 +397,7 @@ public partial class Form1 : Form
                                             listBox1.Items.Add(s);
                                     }
                                 }));
+
                             }
                         }
                     }
