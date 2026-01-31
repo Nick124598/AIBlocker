@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Concurrent;
+using System.DirectoryServices.ActiveDirectory;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -25,10 +26,10 @@ public partial class Form1 : Form
         "midjourney", "claude", "copilot", "deepseek", "ai"
     ];
 
-    private sealed record UserMapping(string Name, DateTimeOffset LastSeen);
+    private readonly SemaphoreSlim _logSemaphore = new(1, 1);
 
-    // Kept for future use; without HTTP registration everything is "UNREGISTERED" unless you populate manually.
-    private readonly ConcurrentDictionary<string, UserMapping> _ipToUser = new();
+
+    private readonly Dictionary<IPAddress, string> _ipToUser = new();
 
     private CancellationTokenSource? _cts;
 
@@ -87,11 +88,9 @@ public partial class Form1 : Form
         return IPAddress.Loopback.ToString();
     }
 
-    private string LookupUsername(string clientIp)
+    private string? LookupUsername(IPAddress clientIp)
     {
-        if (_ipToUser.TryGetValue(clientIp, out var info))
-            return info.Name;
-        return "UNREGISTERED";
+        return _ipToUser.TryGetValue(clientIp, out var username) ? username : null;
     }
 
     private static string ExtractDomainName(ReadOnlySpan<byte> query)
@@ -193,26 +192,55 @@ public partial class Form1 : Form
         }
     }
 
-    private async Task CleanupExpiredMappingsLoopAsync(CancellationToken ct)
+    private static byte[] BuildDnsQuery(string domain, ushort queryType = 1, ushort transactionId = 0)
     {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                await Task.Delay(TimeSpan.FromMinutes(1), ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
+        if (transactionId == 0)
+            transactionId = (ushort)Random.Shared.Next(1, 65536);
 
-            var cutoff = DateTimeOffset.UtcNow - MappingTtl;
-            foreach (var kvp in _ipToUser)
-            {
-                if (kvp.Value.LastSeen < cutoff)
-                    _ipToUser.TryRemove(kvp.Key, out _);
-            }
+        // Encode domain name into DNS label format
+        var labels = domain.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        var qnameLength = labels.Sum(l => l.Length + 1) + 1; // +1 for length byte per label, +1 for null terminator
+
+        var query = new byte[12 + qnameLength + 4]; // Header(12) + QNAME + QTYPE(2) + QCLASS(2)
+
+        // --- DNS HEADER (12 bytes) ---
+        // Transaction ID (2 bytes)
+        query[0] = (byte)(transactionId >> 8);
+        query[1] = (byte)(transactionId & 0xFF);
+
+        // Flags (2 bytes): Standard query with recursion desired (0x0100)
+        query[2] = 0x01; // RD (Recursion Desired) = 1
+        query[3] = 0x00;
+
+        // QDCOUNT (2 bytes): 1 question
+        query[4] = 0x00;
+        query[5] = 0x01;
+
+        // ANCOUNT, NSCOUNT, ARCOUNT (6 bytes): all zeros
+        // Already zeroed by array initialization
+
+        // --- QUESTION SECTION ---
+        var index = 12;
+
+        // Encode QNAME (domain name in label format)
+        foreach (var label in labels)
+        {
+            var labelBytes = Encoding.UTF8.GetBytes(label);
+            query[index++] = (byte)labelBytes.Length;
+            labelBytes.CopyTo(query.AsSpan(index));
+            index += labelBytes.Length;
         }
+        query[index++] = 0x00; // Null terminator
+
+        // QTYPE (2 bytes)
+        query[index++] = (byte)(queryType >> 8);
+        query[index++] = (byte)(queryType & 0xFF);
+
+        // QCLASS (2 bytes): IN (Internet) = 0x0001
+        query[index++] = 0x00;
+        query[index++] = 0x01;
+
+        return query;
     }
 
     private async Task RunDnsServerAsync(string bindIp, CancellationToken ct)
@@ -226,7 +254,7 @@ public partial class Form1 : Form
         //MessageBox.Show("Dns Server running on: " + bindIp + ": " + DnsPort);
         //MessageBox.Show("Forwarding to " + UpstreamDns +  ": " + UpstreamPort);
 
-        while (!ct.IsCancellationRequested)
+        while (true)
         {
             UdpReceiveResult received;
             try
@@ -244,29 +272,32 @@ public partial class Form1 : Form
 
             _ = Task.Run(async () =>
             {
-                var clientIp = received.RemoteEndPoint.Address.ToString();
+                IPEndPoint clientIp = received.RemoteEndPoint;
                 var clientPort = received.RemoteEndPoint.Port;
                 var domain = ExtractDomainName(received.Buffer);
                 var domainLower = domain.ToLowerInvariant();
-
-                var username = LookupUsername(clientIp);
+                
+                var username = LookupUsername(clientIp.Address);
                 var blocked = AiKeywords.Any(k => domainLower.Contains(k, StringComparison.Ordinal));
-
+                var upstreamResp = Array.Empty<byte>();
                 try
                 {
                     if (blocked)
                     {
-                        using var writer = new StreamWriter("log.txt", false);
-                        writer.WriteLine("User: " + username + " used: ");
+                        await _logSemaphore.WaitAsync(ct);
+                        try {
+                            await File.AppendAllTextAsync("log.txt",
+            $"[{NowStr()}] User: {username} | IP: {clientIp} | Blocked: {domain}{Environment.NewLine}",
+            ct);
+                        } finally {
+                            _logSemaphore.Release();
+                        }
 
-                        var resp = BuildNxdomainResponse(received.Buffer);
-                        if (resp.Length > 0)
-                            await udp.SendAsync(resp, resp.Length, received.RemoteEndPoint).ConfigureAwait(false);
-
-                        return;
-                    }
-
-                    var upstreamResp = await ForwardDnsQueryAsync(received.Buffer, ct).ConfigureAwait(false);
+                        var redirectQuery = BuildDnsQuery("google.com");
+                        upstreamResp = await ForwardDnsQueryAsync(redirectQuery, ct).ConfigureAwait(false);
+                        
+                    } else 
+                        upstreamResp = await ForwardDnsQueryAsync(received.Buffer, ct).ConfigureAwait(false);
                     if (upstreamResp is null)
                     {
                         UiLog($"[{NowStr()}] TIMEOUT upstream={UpstreamDns} client={username} ip={clientIp} domain={domain}");
@@ -277,12 +308,14 @@ public partial class Form1 : Form
                 }
                 catch (Exception ex)
                 {
-                    UiLog($"[{NowStr()}] ERROR client={username} ip={clientIp} domain={domain} err={ex.Message}");
+                    //UiLog($"[{NowStr()}] ERROR client={username} ip={clientIp} domain={domain} err={ex.Message}");
+                    MessageBox.Show(username + " " + clientIp + " " + domain + " " + ex.Message);
                 }
             }, ct);
         }
     }
 
+    [Obsolete]
     private async Task ServerListen(string ip, CancellationToken ct)
     {
         var listener = new TcpListener(IPAddress.Parse(ip), StudentsPort);
@@ -311,10 +344,23 @@ public partial class Form1 : Form
 
                             if (data != null && data.TryGetValue("Username", out var username) && !string.IsNullOrWhiteSpace(username))
                             {
+                                var remoteIp = ((IPEndPoint)client.Client.RemoteEndPoint!).Address;
                                 lock (students)
                                     students.Add(username);
-                                 client.GetStream().Write(Encoding.UTF8.GetBytes("OK"));
+                                _ipToUser[remoteIp] = username;
+                                await _logSemaphore.WaitAsync(ct);
+                                try
+                                {
+                                    await File.AppendAllTextAsync("log.txt",
+                    $"[{NowStr()}] User: {username} | IP: {remoteIp} | REGISTER",
+                    ct);
+                                }
+                                finally
+                                {
+                                    _logSemaphore.Release();
+                                }
 
+                                client.GetStream().Write(Encoding.UTF8.GetBytes("OK"));
                                 BeginInvoke((Action)(() =>
                                 {
                                     listBox1.Items.Clear();
@@ -352,7 +398,6 @@ public partial class Form1 : Form
 
         _cts = new CancellationTokenSource();
 
-        _ = CleanupExpiredMappingsLoopAsync(_cts.Token);
         _ = RunDnsServerAsync(ip, _cts.Token);
         _ = ServerListen(ip, _cts.Token);
     }                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          

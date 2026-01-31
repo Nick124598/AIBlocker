@@ -38,9 +38,9 @@
             // 
             listBox1.FormattingEnabled = true;
             listBox1.Location = new Point(8, 117);
-            listBox1.Margin = new Padding(2, 2, 2, 2);
+            listBox1.Margin = new Padding(2);
             listBox1.Name = "listBox1";
-            listBox1.Size = new Size(404, 139);
+            listBox1.Size = new Size(472, 139);
             listBox1.TabIndex = 0;
             listBox1.SelectedIndexChanged += listBox1_SelectedIndexChanged;
             // 
@@ -78,12 +78,12 @@
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(560, 270);
+            ClientSize = new Size(562, 321);
             Controls.Add(localiplabel);
             Controls.Add(label2);
             Controls.Add(label1);
             Controls.Add(listBox1);
-            Margin = new Padding(2, 2, 2, 2);
+            Margin = new Padding(2);
             Name = "Form1";
             Text = "Form1";
             Load += Form1_Load;
