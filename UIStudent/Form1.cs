@@ -18,14 +18,12 @@ namespace UIStudent
         {
             var psi = new ProcessStartInfo
             {
-                FileName = "netsh",
-                Arguments = $"interface ip set dns name=\"{dns}\" static {interfaceName}",
-                Verb = "runas",   // forces admin
-                UseShellExecute = true,
-                CreateNoWindow = true
+                FileName = "powershell",
+                Arguments = $"-Command \"Set-DnsClientServerAddress -InterfaceAlias 'Wi-Fi' -ServerAddresses {dns},127.0.0.1\"",
+                Verb = "runas",
+                UseShellExecute = true
             };
-
-            Process.Start(psi);
+            Process.Start(psi)?.WaitForExit();
         }
 
         private void button1_Click(object sender, EventArgs e)

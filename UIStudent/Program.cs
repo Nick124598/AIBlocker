@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -31,6 +32,14 @@ namespace UIStudent
             Program._socket.Connect(Form1._server_ip, registeration_server_port);
             Program._socket.Send(Encoding.UTF8.GetBytes("EXIT"));
             Program._socket.Close();
+            var psi = new ProcessStartInfo
+            {
+                FileName = "powershell",
+                Arguments = $"-Command \"Set-DnsClientServerAddress -InterfaceAlias 'Wi-Fi' -ServerAddresses 8.8.8.8,8.8.4.4\"",
+                Verb = "runas",
+                UseShellExecute = true
+            };
+            Process.Start(psi)?.WaitForExit();
         }
     }
 }
