@@ -23,7 +23,7 @@ public partial class Form1 : Form
     private static readonly string[] AiKeywords =
     [
         "chat", "gpt", "openai", "dall-e", "bard", "genai", "genie", "llm",
-        "midjourney", "claude", "copilot", "deepseek", "ai"
+        "midjourney", "claude", "copilot", "deepseek", "ai", "gemini"
     ];
 
     private readonly SemaphoreSlim _logSemaphore = new(1, 1);
@@ -64,7 +64,6 @@ public partial class Form1 : Form
 
             var props = ni.GetIPProperties();
 
-            // Must have a default gateway IPv4 => usually your LAN/Wi-Fi
             bool hasIpv4Gateway = props.GatewayAddresses.Any(g =>
                 g.Address.AddressFamily == AddressFamily.InterNetwork &&
                 !g.Address.Equals(IPAddress.Any) &&
@@ -73,7 +72,6 @@ public partial class Form1 : Form
             if (!hasIpv4Gateway)
                 continue;
 
-            // Pick the first real IPv4 unicast address
             var addr = props.UnicastAddresses
                 .Select(u => u.Address)
                 .FirstOrDefault(a =>
@@ -247,13 +245,6 @@ public partial class Form1 : Form
     {
         IPEndPoint bindEp = new(IPAddress.Parse(bindIp), DnsPort);
         using var udp = new UdpClient(bindEp);
-
-        //UiLog($"[{NowStr()}] DNS Server running on {bindIp}:{DnsPort} (UDP)");
-        //UiLog($"[{NowStr()}] Forwarding to {UpstreamDns}:{UpstreamPort}");
-
-        //MessageBox.Show("Dns Server running on: " + bindIp + ": " + DnsPort);
-        //MessageBox.Show("Forwarding to " + UpstreamDns +  ": " + UpstreamPort);
-
         while (true)
         {
             UdpReceiveResult received;
@@ -303,8 +294,17 @@ public partial class Form1 : Form
                         UiLog($"[{NowStr()}] TIMEOUT upstream={UpstreamDns} client={username} ip={clientIp} domain={domain}");
                         return;
                     }
-
                     await udp.SendAsync(upstreamResp, upstreamResp.Length, received.RemoteEndPoint).ConfigureAwait(false);
+                    await _logSemaphore.WaitAsync(ct);
+                    try
+                    {
+                        await File.AppendAllTextAsync(username + ".txt",
+                            $"[{NowStr()}] User: {username} | IP: {clientIp} | domain: {domain}{Environment.NewLine}", ct);
+                    }
+                    finally 
+                    {
+                        _logSemaphore.Release();
+                    }
                 }
                 catch (Exception ex)
                 {
